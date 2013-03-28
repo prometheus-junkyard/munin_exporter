@@ -1,0 +1,8 @@
+language: go
+
+before_script:
+ - go get -v github.com/prometheus/munin_exporter
+
+script:
+ - go build -a -v github.com/prometheus/munin_exporter/...
+ - go test -v github.com/prometheus/munin_exporter/...
