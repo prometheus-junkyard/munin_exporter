@@ -4,8 +4,8 @@ import (
 	"bufio"
 	"flag"
 	"fmt"
-	"github.com/prometheus/client_golang"
-	"github.com/prometheus/client_golang/metrics"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/exp"
 	"io"
 	"log"
 	"net"
@@ -22,21 +22,20 @@ const (
 )
 
 var (
-	listeningAddress    = flag.String("listeningAddress", ":8080", "Address on which to expose JSON metrics.")
-	metricsEndpoint     = flag.String("metricsEndpoint", "/metrics.json", "Path under which to expose JSON metrics.")
+	listeningAddress    = flag.String("listeningAddress", ":8080", "Address on which to expose JSON prometheus.")
 	muninAddress        = flag.String("muninAddress", "localhost:4949", "munin-node address.")
 	muninScrapeInterval = flag.Int("muninScrapeInterval", 60, "Interval in seconds between scrapes.")
 	globalConn          net.Conn
 	hostname            string
 	graphs              []string
-	gaugePerMetric      map[string]metrics.Gauge
+	gaugePerMetric      map[string]prometheus.Gauge
 	muninBanner         *regexp.Regexp
 )
 
 func init() {
 	flag.Parse()
 	var err error
-	gaugePerMetric = make(map[string]metrics.Gauge)
+	gaugePerMetric = make(map[string]prometheus.Gauge)
 	muninBanner, err = regexp.Compile(`# munin node at (.*)`)
 	if err != nil {
 		log.Fatalf("Invalid regexp: %s")
@@ -49,10 +48,8 @@ func init() {
 }
 
 func serveStatus() {
-	exporter := registry.DefaultRegistry.Handler()
-
-	http.Handle(*metricsEndpoint, exporter)
-	http.ListenAndServe(*listeningAddress, nil)
+	exp.Handle(prometheus.ExpositionResource, prometheus.DefaultHandler)
+	http.ListenAndServe(*listeningAddress, exp.DefaultCoarseMux)
 }
 
 func connect() (err error) {
@@ -191,10 +188,10 @@ func registerMetrics() (err error) {
 			if config["info"] != "" {
 				desc = desc + ", " + config["info"]
 			}
-			gauge := metrics.NewGauge()
+			gauge := prometheus.NewGauge()
 			log.Printf("Registered %s: %s", metricName, desc)
 			gaugePerMetric[metricName] = gauge
-			registry.DefaultRegistry.Register(metricName, desc, registry.NilLabels, gauge)
+			prometheus.Register(metricName, desc, prometheus.NilLabels, gauge)
 		}
 	}
 	return nil
@@ -230,8 +227,8 @@ func fetchMetrics() (err error) {
 			key, value_s := strings.Split(parts[0], ".")[0], parts[1]
 			value, err := strconv.ParseFloat(value_s, 64)
 			if err != nil {
-				log.Printf("Couldn't parse value in line %s", line)
-				return err
+				log.Printf("Couldn't parse value in line %s, malformed?", line)
+				continue
 			}
 			labels := map[string]string{
 				"hostname": hostname,
