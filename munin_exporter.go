@@ -4,8 +4,6 @@ import (
 	"bufio"
 	"flag"
 	"fmt"
-	"github.com/prometheus/client_golang/prometheus"
-	"github.com/prometheus/client_golang/prometheus/exp"
 	"io"
 	"log"
 	"net"
@@ -14,6 +12,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/prometheus/client_golang/prometheus"
 )
 
 const (
@@ -22,24 +22,21 @@ const (
 )
 
 var (
-	listeningAddress    = flag.String("listeningAddress", ":8080", "Address on which to expose JSON prometheus.")
+	listeningAddress    = flag.String("listeningAddress", ":8080", "Address on which to expose Prometheus metrics.")
 	muninAddress        = flag.String("muninAddress", "localhost:4949", "munin-node address.")
 	muninScrapeInterval = flag.Int("muninScrapeInterval", 60, "Interval in seconds between scrapes.")
 	globalConn          net.Conn
 	hostname            string
 	graphs              []string
-	gaugePerMetric      map[string]prometheus.Gauge
+	gaugePerMetric      map[string]*prometheus.GaugeVec
 	muninBanner         *regexp.Regexp
 )
 
 func init() {
 	flag.Parse()
 	var err error
-	gaugePerMetric = make(map[string]prometheus.Gauge)
-	muninBanner, err = regexp.Compile(`# munin node at (.*)`)
-	if err != nil {
-		log.Fatalf("Invalid regexp: %s")
-	}
+	gaugePerMetric = map[string]*prometheus.GaugeVec{}
+	muninBanner = regexp.MustCompile(`# munin node at (.*)`)
 
 	err = connect()
 	if err != nil {
@@ -48,8 +45,8 @@ func init() {
 }
 
 func serveStatus() {
-	exp.Handle(prometheus.ExpositionResource, prometheus.DefaultHandler)
-	http.ListenAndServe(*listeningAddress, exp.DefaultCoarseMux)
+	http.Handle("/metrics", prometheus.Handler())
+	http.ListenAndServe(*listeningAddress, nil)
 }
 
 func connect() (err error) {
@@ -188,10 +185,16 @@ func registerMetrics() (err error) {
 			if config["info"] != "" {
 				desc = desc + ", " + config["info"]
 			}
-			gauge := prometheus.NewGauge()
+			gv := prometheus.NewGaugeVec(
+				prometheus.GaugeOpts{
+					Name: metricName,
+					Help: desc,
+				},
+				[]string{"hostname"},
+			)
 			log.Printf("Registered %s: %s", metricName, desc)
-			gaugePerMetric[metricName] = gauge
-			prometheus.Register(metricName, desc, prometheus.NilLabels, gauge)
+			gaugePerMetric[metricName] = gv
+			prometheus.Register(gv)
 		}
 	}
 	return nil
@@ -230,12 +233,9 @@ func fetchMetrics() (err error) {
 				log.Printf("Couldn't parse value in line %s, malformed?", line)
 				continue
 			}
-			labels := map[string]string{
-				"hostname": hostname,
-			}
 			name := graph + "-" + key
 			log.Printf("%s: %f\n", name, value)
-			gaugePerMetric[name].Set(labels, value)
+			gaugePerMetric[name].WithLabelValues(hostname).Set(value)
 		}
 	}
 	return
