@@ -29,6 +29,7 @@ var (
 	hostname            string
 	graphs              []string
 	gaugePerMetric      map[string]*prometheus.GaugeVec
+	counterPerMetric     map[string]*prometheus.CounterVec
 	muninBanner         *regexp.Regexp
 )
 
@@ -36,6 +37,7 @@ func init() {
 	flag.Parse()
 	var err error
 	gaugePerMetric = map[string]*prometheus.GaugeVec{}
+	counterPerMetric = map[string]*prometheus.CounterVec{}
 	muninBanner = regexp.MustCompile(`# munin node at (.*)`)
 
 	err = connect()
@@ -185,16 +187,32 @@ func registerMetrics() (err error) {
 			if config["info"] != "" {
 				desc = desc + ", " + config["info"]
 			}
-			gv := prometheus.NewGaugeVec(
-				prometheus.GaugeOpts{
-					Name: metricName,
-					Help: desc,
-				},
-				[]string{"hostname"},
-			)
-			log.Printf("Registered %s: %s", metricName, desc)
-			gaugePerMetric[metricName] = gv
-			prometheus.Register(gv)
+			muninType := strings.ToLower(config["type"])
+			// muninType can be empty and defaults to gauge
+			if muninType == "counter" || muninType == "derive" {
+	                        gv := prometheus.NewCounterVec(
+        	                        prometheus.CounterOpts{
+                	                        Name: metricName,
+                        	                Help: desc,
+                                	},
+                                	[]string{"hostname"},
+                        	)
+				log.Printf("Registered counter %s: %s", metricName, desc)
+                        	counterPerMetric[metricName] = gv
+                        	prometheus.Register(gv)
+
+			} else {
+                        	gv := prometheus.NewGaugeVec(
+                                	prometheus.GaugeOpts{
+                                        	Name: metricName,
+	                                        Help: desc,
+                	                },
+                        	        []string{"hostname"},
+                        	)
+				log.Printf("Registered gauge %s: %s", metricName, desc)
+        	                gaugePerMetric[metricName] = gv
+                	        prometheus.Register(gv)
+			}
 		}
 	}
 	return nil
@@ -235,7 +253,12 @@ func fetchMetrics() (err error) {
 			}
 			name := strings.Replace(graph + "_" + key, "-","_",-1)
 			log.Printf("%s: %f\n", name, value)
-			gaugePerMetric[name].WithLabelValues(hostname).Set(value)
+			_, isGauge := gaugePerMetric[name]
+			if isGauge {
+	                        gaugePerMetric[name].WithLabelValues(hostname).Set(value)
+			} else {
+				counterPerMetric[name].WithLabelValues(hostname).Set(value)
+			}
 		}
 	}
 	return
